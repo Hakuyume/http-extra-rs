@@ -102,9 +102,22 @@ where
     }
 }
 
-#[derive(Clone, Default)]
 pub struct Layer<T> {
     _phantom: PhantomData<fn() -> T>,
+}
+
+impl<T> Clone for Layer<T> {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl<T> Default for Layer<T> {
+    fn default() -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<S, T> tower::Layer<S> for Layer<T> {
