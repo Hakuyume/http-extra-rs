@@ -25,7 +25,7 @@ where
     S: tower::Service<Request, Response = Response<B>>,
     B: Body,
 {
-    type Response = Response<B>;
+    type Response = Response<Bytes>;
     type Error = Error<S::Error, B::Error>;
     type Future = Future<S, Request, B>;
 
