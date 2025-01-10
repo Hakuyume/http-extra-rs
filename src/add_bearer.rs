@@ -28,7 +28,6 @@ pub struct Service<S> {
 
 #[derive(Clone)]
 enum Source {
-    #[cfg(feature = "tokio-fs")]
     File(Arc<Path>),
 }
 
@@ -48,7 +47,6 @@ where
         let inner = self.inner.clone();
         let inner = mem::replace(&mut self.inner, inner);
         let f = match self.source.clone() {
-            #[cfg(feature = "tokio-fs")]
             Source::File(path) => tokio::fs::read_to_string(path).boxed(),
         };
         Future(State::S0 {
@@ -126,7 +124,6 @@ impl<S> tower::Layer<S> for Layer {
 }
 
 impl Layer {
-    #[cfg(feature = "tokio-fs")]
     pub fn from_file<P>(path: P) -> Self
     where
         P: Into<Arc<Path>>,
