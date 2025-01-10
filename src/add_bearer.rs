@@ -114,6 +114,17 @@ pub struct Layer {
     source: Source,
 }
 
+impl<S> tower::Layer<S> for Layer {
+    type Service = Service<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Service {
+            inner,
+            source: self.source.clone(),
+        }
+    }
+}
+
 impl Layer {
     #[cfg(feature = "tokio-fs")]
     pub fn from_file<P>(path: P) -> Self
@@ -122,17 +133,6 @@ impl Layer {
     {
         Self {
             source: Source::File(path.into()),
-        }
-    }
-}
-
-impl<S> tower::Layer<S> for Layer {
-    type Service = Service<S>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        Service {
-            inner,
-            source: self.source.clone(),
         }
     }
 }
