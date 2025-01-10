@@ -1,0 +1,20 @@
+[package]
+name = "http-extra"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["tokio-fs"]
+tokio-fs = ["tokio/fs"]
+
+[dependencies]
+bytes = "1.9.0"
+futures = { version = "0.3.31", default-features = false, features = ["std"] }
+headers = "0.4.0"
+http = "1.2.0"
+http-body = "1.0.1"
+http-body-util = "0.1.2"
+pin-project = "1.1.8"
+thiserror = "2.0.10"
+tokio = { version = "1.43.0", optional = true }
+tower = "0.5.2"
