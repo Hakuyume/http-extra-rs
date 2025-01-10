@@ -1,11 +1,9 @@
-pub mod from_response;
-
 use headers::{ContentLength, ContentType, HeaderMapExt};
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use http::Request;
 use serde::Serialize;
 
-pub fn to_request<T, B>(request: Request<T>) -> Result<Request<B>, serde_json::Error>
+pub fn to_json_request<T, B>(request: Request<T>) -> Result<Request<B>, serde_json::Error>
 where
     T: Serialize,
     B: From<String>,
