@@ -59,16 +59,16 @@ where
         let inner = mem::replace(&mut self.inner, inner);
         let f = match self.source.clone() {
             Source::Env(key) => futures::future::lazy(move |_| env::var(key))
-                .map_err(Error::Env)
-                .and_then(|token| {
-                    future::ready(Authorization::bearer(&token).map_err(Error::InvalidBearerToken))
+                .map(|token| {
+                    Authorization::bearer(&token.map_err(Error::Env)?)
+                        .map_err(Error::InvalidBearerToken)
                 })
                 .boxed(),
             #[cfg(feature = "tokio-fs")]
             Source::File(path) => tokio::fs::read_to_string(path)
-                .map_err(Error::Io)
-                .and_then(|token| {
-                    future::ready(Authorization::bearer(&token).map_err(Error::InvalidBearerToken))
+                .map(|token| {
+                    Authorization::bearer(&token.map_err(Error::Io)?)
+                        .map_err(Error::InvalidBearerToken)
                 })
                 .boxed(),
             Source::Token(header) => future::ready(Ok(header)).boxed(),
