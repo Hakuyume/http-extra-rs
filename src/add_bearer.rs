@@ -1,6 +1,7 @@
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::TryFutureExt;
+use headers::authorization::{Bearer, InvalidBearerToken};
 use headers::{Authorization, HeaderMapExt};
 use http::Request;
 use std::convert::Infallible;
@@ -22,7 +23,7 @@ pub enum Error<S> {
     #[error(transparent)]
     Io(io::Error),
     #[error(transparent)]
-    InvalidBearerToken(headers::authorization::InvalidBearerToken),
+    InvalidBearerToken(InvalidBearerToken),
     #[error(transparent)]
     Service(S),
 }
@@ -38,6 +39,7 @@ enum Source {
     Env(Arc<OsStr>),
     #[cfg(feature = "tokio-fs")]
     File(Arc<Path>),
+    Token(Authorization<Bearer>),
 }
 
 impl<S, B> tower::Service<Request<B>> for Service<S>
@@ -58,9 +60,18 @@ where
         let f = match self.source.clone() {
             Source::Env(key) => futures::future::lazy(move |_| env::var(key))
                 .map_err(Error::Env)
+                .and_then(|token| {
+                    future::ready(Authorization::bearer(&token).map_err(Error::InvalidBearerToken))
+                })
                 .boxed(),
             #[cfg(feature = "tokio-fs")]
-            Source::File(path) => tokio::fs::read_to_string(path).map_err(Error::Io).boxed(),
+            Source::File(path) => tokio::fs::read_to_string(path)
+                .map_err(Error::Io)
+                .and_then(|token| {
+                    future::ready(Authorization::bearer(&token).map_err(Error::InvalidBearerToken))
+                })
+                .boxed(),
+            Source::Token(header) => future::ready(Ok(header)).boxed(),
         };
         Future(State::S0 {
             f,
@@ -82,7 +93,7 @@ where
 {
     S0 {
         #[pin]
-        f: BoxFuture<'static, Result<String, Error<Infallible>>>,
+        f: BoxFuture<'static, Result<Authorization<Bearer>, Error<Infallible>>>,
         inner: S,
         request: Option<Request<B>>,
     },
@@ -103,13 +114,11 @@ where
         loop {
             match this.0.as_mut().project() {
                 StateProj::S0 { f, inner, request } => {
-                    let token = ready!(f.poll(cx)).map_err(|e| match e {
+                    let header = ready!(f.poll(cx)).map_err(|e| match e {
                         Error::Env(e) => Error::Env(e),
                         Error::Io(e) => Error::Io(e),
                         Error::InvalidBearerToken(e) => Error::InvalidBearerToken(e),
                     })?;
-                    let header =
-                        Authorization::bearer(&token).map_err(Error::InvalidBearerToken)?;
                     let mut request = request.take().unwrap();
                     request.headers_mut().typed_insert(header);
                     let f = inner.call(request);
@@ -158,5 +167,11 @@ impl Layer {
         Self {
             source: Source::File(path.into()),
         }
+    }
+
+    pub fn from_token(token: &str) -> Result<Self, InvalidBearerToken> {
+        Ok(Self {
+            source: Source::Token(Authorization::bearer(token)?),
+        })
     }
 }
