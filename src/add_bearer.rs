@@ -1,6 +1,5 @@
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use futures::TryFutureExt;
 use headers::authorization::{Bearer, InvalidBearerToken};
 use headers::{Authorization, HeaderMapExt};
 use http::Request;
