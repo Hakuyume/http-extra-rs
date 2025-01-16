@@ -1,10 +1,15 @@
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::TryFutureExt;
 use headers::{Authorization, HeaderMapExt};
 use http::Request;
+use std::convert::Infallible;
+use std::env;
+use std::ffi::OsStr;
 use std::future;
 use std::io;
 use std::mem;
+#[cfg(feature = "tokio-fs")]
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -12,6 +17,8 @@ use std::task::{ready, Context, Poll};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error<S> {
+    #[error(transparent)]
+    Env(env::VarError),
     #[error(transparent)]
     Io(io::Error),
     #[error(transparent)]
@@ -28,6 +35,8 @@ pub struct Service<S> {
 
 #[derive(Clone)]
 enum Source {
+    Env(Arc<OsStr>),
+    #[cfg(feature = "tokio-fs")]
     File(Arc<Path>),
 }
 
@@ -47,7 +56,11 @@ where
         let inner = self.inner.clone();
         let inner = mem::replace(&mut self.inner, inner);
         let f = match self.source.clone() {
-            Source::File(path) => tokio::fs::read_to_string(path).boxed(),
+            Source::Env(key) => futures::future::lazy(move |_| env::var(key))
+                .map_err(Error::Env)
+                .boxed(),
+            #[cfg(feature = "tokio-fs")]
+            Source::File(path) => tokio::fs::read_to_string(path).map_err(Error::Io).boxed(),
         };
         Future(State::S0 {
             f,
@@ -69,7 +82,7 @@ where
 {
     S0 {
         #[pin]
-        f: BoxFuture<'static, io::Result<String>>,
+        f: BoxFuture<'static, Result<String, Error<Infallible>>>,
         inner: S,
         request: Option<Request<B>>,
     },
@@ -90,7 +103,11 @@ where
         loop {
             match this.0.as_mut().project() {
                 StateProj::S0 { f, inner, request } => {
-                    let token = ready!(f.poll(cx)).map_err(Error::Io)?;
+                    let token = ready!(f.poll(cx)).map_err(|e| match e {
+                        Error::Env(e) => Error::Env(e),
+                        Error::Io(e) => Error::Io(e),
+                        Error::InvalidBearerToken(e) => Error::InvalidBearerToken(e),
+                    })?;
                     let header =
                         Authorization::bearer(&token).map_err(Error::InvalidBearerToken)?;
                     let mut request = request.take().unwrap();
@@ -124,6 +141,16 @@ impl<S> tower::Layer<S> for Layer {
 }
 
 impl Layer {
+    pub fn from_env<K>(key: K) -> Self
+    where
+        K: Into<Arc<OsStr>>,
+    {
+        Self {
+            source: Source::Env(key.into()),
+        }
+    }
+
+    #[cfg(feature = "tokio-fs")]
     pub fn from_file<P>(path: P) -> Self
     where
         P: Into<Arc<Path>>,
