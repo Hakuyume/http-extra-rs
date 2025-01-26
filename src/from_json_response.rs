@@ -1,12 +1,13 @@
+use crate::collect_body;
+use futures::future::Map;
+use futures::FutureExt;
 use http::Response;
 use http_body::Body;
-use http_body_util::combinators::Collect;
-use http_body_util::BodyExt;
+use http_body_util::Collected;
 use serde::Deserialize;
-use std::future;
 use std::marker::PhantomData;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll};
+use tower::ServiceBuilder;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error<S, B> {
@@ -20,7 +21,7 @@ pub enum Error<S, B> {
 
 #[derive(Clone)]
 pub struct Service<S, T> {
-    inner: S,
+    inner: collect_body::Service<S>,
     _phantom: PhantomData<fn() -> T>,
 }
 
@@ -35,70 +36,36 @@ where
     type Future = Future<S, Request, B, T>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx).map_err(Error::Service)
+        self.inner.poll_ready(cx).map_err(map_err)
     }
 
     fn call(&mut self, request: Request) -> Self::Future {
         let f = self.inner.call(request);
-        Future(State::S0 { f }, PhantomData)
+        f.map(|response| {
+            let response = response.map_err(map_err)?;
+            let (parts, body) = response.into_parts();
+            let body = serde_json::from_slice(&body.to_bytes()).map_err(Error::Json)?;
+            let response = Response::from_parts(parts, body);
+            Ok(response)
+        })
     }
 }
 
-#[pin_project::pin_project]
-pub struct Future<S, Request, B, T>(#[pin] State<S, Request, B>, PhantomData<fn() -> T>)
-where
-    S: tower::Service<Request, Response = Response<B>>,
-    B: Body,
-    T: for<'de> Deserialize<'de>;
+pub type Future<S, Request, B, T> = Map<
+    <collect_body::Service<S> as tower::Service<Request>>::Future,
+    fn(
+        Result<
+            Response<Collected<<B as Body>::Data>>,
+            collect_body::Error<<S as tower::Service<Request>>::Error, <B as Body>::Error>,
+        >,
+    )
+        -> Result<Response<T>, Error<<S as tower::Service<Request>>::Error, <B as Body>::Error>>,
+>;
 
-#[allow(clippy::large_enum_variant)]
-#[pin_project::pin_project(project = StateProj)]
-enum State<S, Request, B>
-where
-    S: tower::Service<Request, Response = Response<B>>,
-    B: Body,
-{
-    S0 {
-        #[pin]
-        f: S::Future,
-    },
-    S1 {
-        #[pin]
-        f: Collect<B>,
-        parts: Option<http::response::Parts>,
-    },
-}
-
-impl<S, Request, B, T> future::Future for Future<S, Request, B, T>
-where
-    S: tower::Service<Request, Response = Response<B>>,
-    B: Body,
-    T: for<'de> Deserialize<'de>,
-{
-    type Output = Result<Response<T>, Error<S::Error, B::Error>>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.project();
-        loop {
-            match this.0.as_mut().project() {
-                StateProj::S0 { f } => {
-                    let response = ready!(f.poll(cx)).map_err(Error::Service)?;
-                    let (parts, body) = response.into_parts();
-                    let f = body.collect();
-                    this.0.set(State::S1 {
-                        f,
-                        parts: Some(parts),
-                    });
-                }
-                StateProj::S1 { f, parts } => {
-                    let body = ready!(f.poll(cx)).map_err(Error::Body)?;
-                    let parts = parts.take().unwrap();
-                    let body = serde_json::from_slice(&body.to_bytes()).map_err(Error::Json)?;
-                    let response = Response::from_parts(parts, body);
-                    break Poll::Ready(Ok(response));
-                }
-            }
-        }
+fn map_err<S, B>(e: collect_body::Error<S, B>) -> Error<S, B> {
+    match e {
+        collect_body::Error::Service(e) => Error::Service(e),
+        collect_body::Error::Body(e) => Error::Body(e),
     }
 }
 
@@ -124,6 +91,9 @@ impl<S, T> tower::Layer<S> for Layer<T> {
     type Service = Service<S, T>;
 
     fn layer(&self, inner: S) -> Self::Service {
+        let inner = ServiceBuilder::new()
+            .layer(collect_body::Layer::default())
+            .service(inner);
         Service {
             inner,
             _phantom: PhantomData,
