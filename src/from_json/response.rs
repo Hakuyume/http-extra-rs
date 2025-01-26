@@ -1,4 +1,4 @@
-use crate::collect_body;
+use crate::collect_body::response as collect_body;
 use futures::future::Map;
 use futures::FutureExt;
 use http::Response;
