@@ -1,7 +1,6 @@
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use headers::authorization::Bearer;
-pub use headers::authorization::InvalidBearerToken;
+use headers::authorization::{Bearer, InvalidBearerToken};
 use headers::{Authorization, HeaderMapExt};
 use http::Request;
 use std::convert::Infallible;
@@ -39,7 +38,7 @@ enum Source {
     Env(Arc<OsStr>),
     #[cfg(feature = "tokio-fs")]
     File(Arc<Path>),
-    Token(Authorization<Bearer>),
+    Token(Arc<str>),
 }
 
 impl<S, B> tower::Service<Request<B>> for Service<S>
@@ -71,7 +70,10 @@ where
                         .map_err(Error::InvalidBearerToken)
                 })
                 .boxed(),
-            Source::Token(header) => future::ready(Ok(header)).boxed(),
+            Source::Token(token) => {
+                future::ready(Authorization::bearer(&token).map_err(Error::InvalidBearerToken))
+                    .boxed()
+            }
         };
         Future(State::S0 {
             f,
@@ -169,9 +171,12 @@ impl Layer {
         }
     }
 
-    pub fn from_token(token: &str) -> Result<Self, InvalidBearerToken> {
-        Ok(Self {
-            source: Source::Token(Authorization::bearer(token)?),
-        })
+    pub fn from_token<T>(token: T) -> Self
+    where
+        T: Into<Arc<str>>,
+    {
+        Self {
+            source: Source::Token(token.into()),
+        }
     }
 }
