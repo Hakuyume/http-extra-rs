@@ -1,6 +1,7 @@
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use headers::authorization::{Bearer, InvalidBearerToken};
+use headers::authorization::Bearer;
+pub use headers::authorization::InvalidBearerToken;
 use headers::{Authorization, HeaderMapExt};
 use http::Request;
 use std::convert::Infallible;
